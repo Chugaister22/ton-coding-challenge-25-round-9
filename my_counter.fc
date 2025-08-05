@@ -1,0 +1,79 @@
+#include "imports/stdlib.fc";
+const MY_WORKCHAIN = BASECHAIN;
+const op::without_dump = "without_dump"c; ;; e3c4f498
+const op::with_dump = "with_dump"c; ;; 9d848e0e
+
+const op::sum = "sum"c; ;; c8bd9f4d
+const op::mul = "mul"c; ;; a90221a1
+
+int sum(int a, int b) impure inline {
+    throw_unless(1000, a + b < 24);
+    return a + b;
+}
+
+int mul(int a, int b) impure inline {
+    throw_unless(1001, a * b < 24);
+    return a * b;
+}
+
+() route_internal(slice ctx::sender, int ctx::value, int ctx::fwd_fee, slice ctx::body) impure inline {
+    ;; Load op and query id
+    (int op, int query_id) = ctx::body~load_op_and_query_id();
+
+    {-
+        When executing op::without_dump, the result returned by sum() is not used. Even though I marked sum() as impure, 
+        the contract still does not throw an error.
+
+        -> The impure functionality is not being triggered.
+    -}
+    if op == op::without_dump {
+        var func =  query_id % 2 == 0 ? sum : mul;
+        int result = func(100, 200);
+        ;; ~dump(result);
+        return ();
+    }
+
+    {- 
+        When executing op::with_dump, the result returned by mul() is used -> Contract throws error
+    -}
+    if op == op::with_dump {
+        var func = query_id % 2 == 0 ? sum : mul;
+        int result = func(100, 200);
+        ~dump(result);
+        return ();
+    }
+
+    {-
+        When executing op::sum, the result returned by sum() is not used, but sum() is called directly -> Contract does throw error
+    -}
+    if op == op::sum {
+        int result = sum(100, 200);
+        return ();
+    }
+
+    {-
+        When executing op::mul, the result returned by mul() is used -> Contract throws error
+    -}
+    if op == op::mul {
+        int result = mul(100, 200);
+        ~dump(result);
+        return ();
+    }
+
+    throw(0xffff);
+}
+
+() main(int ctx::value, cell in_msg_full, slice ctx::body) impure {
+    slice s = in_msg_full.begin_parse();
+    int flags = s~load_msg_flags();
+
+    if (is_bounced(flags)) { ;; skip all bounced messages
+        return ();
+    }
+
+    ;; get context
+    (slice ctx::sender, int ctx::fwd_fee) = s~retrieve_ctx(MY_WORKCHAIN);
+
+    ;; route function to handle internal message
+    route_internal(ctx::sender, ctx::value, ctx::fwd_fee, ctx::body);
+}
